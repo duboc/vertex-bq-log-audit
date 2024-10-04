@@ -11,7 +11,7 @@ logging.basicConfig(filename='gemini_api_log.log', level=logging.INFO,
 def log_dict(title, data):
     logging.info(f"{title}:\n{json.dumps(data, indent=2, default=str)}")
 
-vertexai.init(project="conventodapenha", location="us-central1")
+vertexai.init(project="your-project-id", location="us-central1")
 
 model = GenerativeModel("gemini-1.5-flash-002")
 prompt = "Write a story about a magic backpack."
