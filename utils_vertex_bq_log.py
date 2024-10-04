@@ -1,18 +1,26 @@
+import os
+from dotenv import load_dotenv
 import vertexai
 from vertexai.generative_models import GenerativeModel
 from google.cloud import bigquery
 import json
 from datetime import datetime
 
+# Load environment variables from .env file
+load_dotenv()
+
 # Initialize Vertex AI
-vertexai.init(project="conventodapenha", location="us-central1")
+vertexai.init(
+    project=os.getenv("VERTEX_PROJECT_ID"),
+    location=os.getenv("VERTEX_LOCATION")
+)
 
 # Initialize BigQuery client
-client = bigquery.Client()
+client = bigquery.Client(project=os.getenv("VERTEX_PROJECT_ID"))
 
 # Set up BigQuery dataset and table
-dataset_id = "gemini_audit"
-table_id = "prompt_audit"
+dataset_id = os.getenv("BQ_DATASET_ID", "gemini_audit")
+table_id = os.getenv("BQ_TABLE_ID", "prompt_audit")
 table_ref = client.dataset(dataset_id).table(table_id)
 
 # Define schema for BigQuery table
@@ -60,7 +68,7 @@ except Exception:
     table = bigquery.Table(table_ref, schema=schema)
     table = client.create_table(table)
 
-model = GenerativeModel("gemini-1.5-flash-002")
+model = GenerativeModel(os.getenv("VERTEX_MODEL_ID", "gemini-1.5-flash-002"))
 prompt = "Write a story about a magic backpack."
 
 response = model.generate_content(prompt)

@@ -3,6 +3,9 @@ from vertexai.generative_models import GenerativeModel
 import logging
 import json
 from datetime import datetime
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(filename='gemini_api_log.log', level=logging.INFO, 
@@ -11,7 +14,10 @@ logging.basicConfig(filename='gemini_api_log.log', level=logging.INFO,
 def log_dict(title, data):
     logging.info(f"{title}:\n{json.dumps(data, indent=2, default=str)}")
 
-vertexai.init(project="your-project-id", location="us-central1")
+vertexai.init(
+    project=os.getenv("VERTEX_PROJECT_ID"),
+    location=os.getenv("VERTEX_LOCATION")
+)
 
 model = GenerativeModel("gemini-1.5-flash-002")
 prompt = "Write a story about a magic backpack."
