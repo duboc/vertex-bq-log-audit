@@ -1,27 +1,70 @@
 import vertexai
 from vertexai.generative_models import GenerativeModel
-import logging
+from google.cloud import bigquery
 import json
 from datetime import datetime
 
-# Set up logging
-logging.basicConfig(filename='gemini_api_log.log', level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
-def log_dict(title, data):
-    logging.info(f"{title}:\n{json.dumps(data, indent=2, default=str)}")
-
+# Initialize Vertex AI
 vertexai.init(project="conventodapenha", location="us-central1")
+
+# Initialize BigQuery client
+client = bigquery.Client()
+
+# Set up BigQuery dataset and table
+dataset_id = "gemini_audit"
+table_id = "prompt_audit"
+table_ref = client.dataset(dataset_id).table(table_id)
+
+# Define schema for BigQuery table
+schema = [
+    bigquery.SchemaField("timestamp", "TIMESTAMP"),
+    bigquery.SchemaField("prompt", "STRING"),
+    bigquery.SchemaField("response", "STRING"),
+    bigquery.SchemaField("prompt_token_count", "INTEGER"),
+    bigquery.SchemaField("candidates_token_count", "INTEGER"),
+    bigquery.SchemaField("total_token_count", "INTEGER"),
+    bigquery.SchemaField("candidates", "RECORD", mode="REPEATED", fields=[
+        bigquery.SchemaField("index", "INTEGER"),
+        bigquery.SchemaField("finish_reason", "STRING"),
+        bigquery.SchemaField("finish_message", "STRING"),
+        bigquery.SchemaField("safety_ratings", "RECORD", mode="REPEATED", fields=[
+            bigquery.SchemaField("category", "STRING"),
+            bigquery.SchemaField("probability", "STRING"),
+            bigquery.SchemaField("probability_score", "FLOAT"),
+            bigquery.SchemaField("severity", "STRING"),
+            bigquery.SchemaField("severity_score", "FLOAT"),
+            bigquery.SchemaField("blocked", "BOOLEAN")
+        ]),
+        bigquery.SchemaField("citations", "RECORD", mode="REPEATED", fields=[
+            bigquery.SchemaField("start_index", "INTEGER"),
+            bigquery.SchemaField("end_index", "INTEGER"),
+            bigquery.SchemaField("uri", "STRING"),
+            bigquery.SchemaField("title", "STRING"),
+            bigquery.SchemaField("license", "STRING"),
+            bigquery.SchemaField("publication_date", "DATE")
+        ]),
+        bigquery.SchemaField("grounding_metadata", "RECORD", fields=[
+            bigquery.SchemaField("web_search_queries", "STRING", mode="REPEATED"),
+            bigquery.SchemaField("grounding_chunks", "RECORD", mode="REPEATED", fields=[
+                bigquery.SchemaField("uri", "STRING"),
+                bigquery.SchemaField("title", "STRING")
+            ])
+        ])
+    ])
+]
+
+# Create the table if it doesn't exist
+try:
+    client.get_table(table_ref)
+except Exception:
+    table = bigquery.Table(table_ref, schema=schema)
+    table = client.create_table(table)
 
 model = GenerativeModel("gemini-1.5-flash-002")
 prompt = "Write a story about a magic backpack."
 
-# Log input
-logging.info(f"Input Prompt: {prompt}")
-
 response = model.generate_content(prompt)
 
-# Function to extract safety ratings
 def extract_safety_ratings(safety_ratings):
     return [
         {
@@ -34,51 +77,54 @@ def extract_safety_ratings(safety_ratings):
         } for rating in safety_ratings
     ]
 
-# Log output
-logging.info("Generated Content:")
-logging.info(response.text)
+row = {
+    "timestamp": datetime.now(),
+    "prompt": prompt,
+    "response": response.text,
+    "prompt_token_count": response.usage_metadata.prompt_token_count,
+    "candidates_token_count": response.usage_metadata.candidates_token_count,
+    "total_token_count": response.usage_metadata.total_token_count,
+    "candidates": []
+}
 
-# Log metadata
-log_dict("Metadata", {
-    "Prompt Token Count": response.usage_metadata.prompt_token_count,
-    "Candidates Token Count": response.usage_metadata.candidates_token_count,
-    "Total Token Count": response.usage_metadata.total_token_count
-})
-
-for i, candidate in enumerate(response.candidates):
+for candidate in response.candidates:
     candidate_data = {
-        "Index": candidate.index,
-        "Finish Reason": candidate.finish_reason,
-        "Finish Message": candidate.finish_message,
-        "Safety Ratings": extract_safety_ratings(candidate.safety_ratings)
+        "index": candidate.index,
+        "finish_reason": candidate.finish_reason,
+        "finish_message": candidate.finish_message,
+        "safety_ratings": extract_safety_ratings(candidate.safety_ratings),
+        "citations": [],
+        "grounding_metadata": {"web_search_queries": [], "grounding_chunks": []}
     }
 
     if candidate.citation_metadata:
-        candidate_data["Citations"] = [
+        candidate_data["citations"] = [
             {
-                "Start Index": citation.start_index,
-                "End Index": citation.end_index,
-                "URI": citation.uri,
-                "Title": citation.title,
-                "License": citation.license,
-                "Publication Date": f"{citation.publication_date.year}-{citation.publication_date.month}-{citation.publication_date.day}" if citation.publication_date else None
+                "start_index": citation.start_index,
+                "end_index": citation.end_index,
+                "uri": citation.uri,
+                "title": citation.title,
+                "license": citation.license,
+                "publication_date": citation.publication_date.date() if citation.publication_date else None
             } for citation in candidate.citation_metadata.citations
         ]
 
     if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
-        grounding_data = {}
         if candidate.grounding_metadata.web_search_queries:
-            grounding_data["Web Search Queries"] = candidate.grounding_metadata.web_search_queries
+            candidate_data["grounding_metadata"]["web_search_queries"] = candidate.grounding_metadata.web_search_queries
         if candidate.grounding_metadata.grounding_chunks:
-            grounding_data["Grounding Chunks"] = [
+            candidate_data["grounding_metadata"]["grounding_chunks"] = [
                 {
-                    "URI": chunk.web.uri if hasattr(chunk, 'web') else chunk.retrieved_context.uri,
-                    "Title": chunk.web.title if hasattr(chunk, 'web') else chunk.retrieved_context.title
+                    "uri": chunk.web.uri if hasattr(chunk, 'web') else chunk.retrieved_context.uri,
+                    "title": chunk.web.title if hasattr(chunk, 'web') else chunk.retrieved_context.title
                 } for chunk in candidate.grounding_metadata.grounding_chunks
             ]
-        candidate_data["Grounding Metadata"] = grounding_data
 
-    log_dict(f"Candidate {i + 1}", candidate_data)
+    row["candidates"].append(candidate_data)
 
-# Print to console that logging is complete
-print("Logging complete. Check gemini_api_log.log for details.")
+# Insert the row into BigQuery
+errors = client.insert_rows_json(table_ref, [row])
+if errors:
+    print(f"Encountered errors while inserting row: {errors}")
+else:
+    print("Row inserted successfully.")
